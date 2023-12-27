@@ -1,0 +1,119 @@
+(a) How the denoising autoencoder works
+A denoising autoencoder is a type of neural network that aims to learn a representation (encoding) for a set of data, typically for the purpose of dimensionality reduction, by adding a small amount of noise to the input data and training the network to recover the original undistorted data. The process involves two main components: the encoder and the decoder.
+
+Encoder: This part of the network compresses the input into a latent-space representation. It learns to ignore the noise and capture the essence of the input data.
+Decoder: The decoder learns to reconstruct the input data from the latent space representation, effectively denoising the data.
+The training process involves minimizing a reconstruction loss, which measures the difference between the output of the decoder (the denoised data) and the original clean data.
+
+
+(b) Batch Normalization
+Batch normalization is a technique used to improve the training of deep neural networks. It normalizes the output of a previous activation layer by subtracting the batch mean and dividing by the batch standard deviation. After this, the method applies a scale and shift transformation. The main benefits of batch normalization are:
+
+It can enable the use of higher learning rates, speeding up the training process.
+It reduces the problem of the initial starting weights.
+It can act as a form of regularization, slightly reducing the need for dropout, for example.
+It may help mitigate the problem of internal covariate shift, where the distribution of activations changes during training.
+
+
+(c) Script to Generate Random Images
+
+def estimate_latent_space_distribution(encoder, dataloader):
+    encoder.eval()
+    latent_vectors = []
+    with torch.no_grad():
+        for image_batch, _ in dataloader:
+            image_batch = image_batch.to(device)
+            encoded = encoder(image_batch)
+            latent_vectors.append(encoded.cpu().numpy())
+    latent_vectors = np.concatenate(latent_vectors, axis=0)
+    mean = np.mean(latent_vectors, axis=0)
+    std = np.std(latent_vectors, axis=0)
+    return mean, std
+
+def generate_images_from_distribution(decoder, mean, std, num_images=9):
+    random_latent_vectors = np.random.normal(loc=mean, scale=std, size=(num_images, mean.shape[0]))
+    random_latent_vectors = torch.from_numpy(random_latent_vectors).float().to(device)
+
+    decoder.eval()
+    with torch.no_grad():
+        generated_images = decoder(random_latent_vectors)
+
+    fig, axs = plt.subplots(3, 3, figsize=(6, 6))
+    for i, ax in enumerate(axs.flatten()):
+        img = generated_images[i].cpu().squeeze().numpy()
+        ax.imshow(img, cmap='gist_gray')
+        ax.axis('off')
+    plt.show()
+
+latent_mean, latent_std = estimate_latent_space_distribution(encoder, train_loader)
+generate_images_from_distribution(decoder, latent_mean, latent_std)
+
+
+(d) Script for Clustering Accuracy Calculation
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.cluster import KMeans
+from sklearn.metrics import confusion_matrix
+from scipy.optimize import linear_sum_assignment
+
+def plot_confusion_matrix(matrix, title):
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(matrix, annot=True, fmt='g', cmap='Blues')
+    plt.title(title)
+    plt.ylabel('True Label')
+    plt.xlabel('Cluster Label')
+    plt.show()
+
+def map_kmeans_to_true_labels(true_labels, kmeans_labels):
+    n_true_labels = len(np.unique(true_labels))
+    n_kmeans_labels = len(np.unique(kmeans_labels))
+    contingency_matrix = np.zeros((n_true_labels, n_kmeans_labels), dtype=np.int64)
+
+    for true_label, kmeans_label in zip(true_labels, kmeans_labels):
+        contingency_matrix[true_label, kmeans_label] += 1
+    row_ind, col_ind = linear_sum_assignment(contingency_matrix, maximize=True)
+    mapping = {kmeans_label: true_label for true_label, kmeans_label in zip(row_ind, col_ind)}
+
+    return mapping
+
+
+def calculate_accuracy_and_display_matrices(cluster_labels, true_labels, mapping):
+    mapped_cluster_labels = [mapping[label] for label in cluster_labels]
+    mapped_matrix = confusion_matrix(true_labels, mapped_cluster_labels)
+    plot_confusion_matrix(mapped_matrix, "Mapped Confusion Matrix")
+
+    correct = sum(mapped == true for mapped, true in zip(
+        mapped_cluster_labels, true_labels))
+    accuracy = correct / len(true_labels)
+    return accuracy
+
+
+def cluster_images_and_calculate_accuracy(encoder, train_loader, n_clusters=10):
+    encoder.eval()
+    features = []
+    collected_true_labels = []
+
+    with torch.no_grad():
+        for image_batch, labels in train_loader:
+            image_batch = image_batch.to(device)
+            encoded = encoder(image_batch)
+            features.extend(encoded.cpu().numpy())
+            collected_true_labels.extend(labels.numpy()) 
+
+    if len(collected_true_labels) != len(features):
+        raise ValueError("Mismatch in the number of features and true labels")
+
+    kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(features)
+    cluster_labels = kmeans.labels_
+
+    mapping = map_kmeans_to_true_labels(collected_true_labels, cluster_labels)
+    accuracy = calculate_accuracy_and_display_matrices(
+        cluster_labels, collected_true_labels, mapping)
+    print("Accuracy:", accuracy)
+
+cluster_images_and_calculate_accuracy(encoder, train_loader)
+
